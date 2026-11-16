@@ -1066,6 +1066,7 @@ function vToday(){
   ${simple?"":`<div class="card"><div class="row between"><div class="eyebrow">Abitudini</div><span class="num muted">${habitsDone}/${S.core.habits.length}</span></div>
     <div class="list">${S.core.habits.map((h,i)=>`<div class="li"><button class="check ${d.habits[i]?"on":""}" data-act="habit" data-v="${i}" aria-label="${esc(h)}">${d.habits[i]?IC.tick:""}</button><div class="grow">${esc(h)}</div></div>`).join("")}</div></div>`}
   ${(S.core.weights.length||allWorkouts().length)&&(!S.core.lastBackup||Date.now()-S.core.lastBackup>7*864e5)?`<div class="card"><div class="row between"><div><div class="eyebrow">Backup della settimana</div><div class="small muted">${S.core.lastBackup?"Ultimo il "+dateShort(dk(new Date(S.core.lastBackup)))+". ":""}Un tocco e lo salvi su Google Drive.</div></div><button class="btn sm pri" data-act="backupShare">Salva</button></div></div>`:""}
+  ${FIREBASE_CONFIG&&FB.ready&&!FB.user?`<div class="card"><div class="row between"><div><div class="eyebrow">Cloud</div><div class="small muted">Accedi con Google per non perdere i dati e averli su tutti i dispositivi.</div></div><button class="btn sm pri" data-act="fbIn">Accedi</button></div></div>`:""}
   <button class="btn sm ghost block" data-act="simple">${simple?"Mostra tutto":"Passa alla modalità essenziale"}</button>
   <div class="sync" id="syncLine">${syncText()}</div>`;
 }
@@ -1292,6 +1293,7 @@ function vMe(){
     ${p.kcalAdj?`<button class="btn sm" data-act="resetAdj">Azzera ritocco coach (${p.kcalAdj>0?"+":""}${p.kcalAdj} kcal)</button>`:""}</div>
   <div class="card"><div class="eyebrow">Abitudini giornaliere</div>
     <label class="f" for="pf_habits">Una per riga<textarea id="pf_habits" data-habits="1">${esc(S.core.habits.join("\n"))}</textarea></label></div>
+  <div class="card"><div class="eyebrow">Account e sincronizzazione</div>${syncCard()}</div>
   <div class="card"><div class="eyebrow">Dati e backup</div>
     <p class="small muted" style="margin:0" id="syncLine2">${syncText()}</p>
     <p class="small muted" style="margin:0">${S.core.lastBackup?`Ultimo backup: ${dateShort(dk(new Date(S.core.lastBackup)))}`:"Nessun backup ancora."} ${PERSIST===true?"Archiviazione persistente attiva: il telefono non cancella i dati da solo.":PERSIST===false?"Il browser non ha confermato l'archiviazione persistente: installa l'app e fai backup regolari.":""}</p>
@@ -1305,7 +1307,7 @@ function vMe(){
 }
 /* ---------- sheets ---------- */
 function openSheet(html){ $("#sheetIn").innerHTML=`<div class="grab"></div>`+html; document.body.classList.add("sheet"); }
-function closeSheet(){ document.body.classList.remove("sheet"); $("#sheetIn").innerHTML=""; stopDict(); clearInterval(RT_IV); RT=null; clearInterval(SW_IV); if(SW.run){ SW.acc+=Date.now()-SW.start; SW.run=false; } }
+function closeSheet(){ document.body.classList.remove("sheet"); $("#sheetIn").innerHTML=""; stopDict(); clearInterval(RT_IV); RT=null; clearInterval(SW_IV); if(SW.run){ SW.acc+=Date.now()-SW.start; SW.run=false; } if(UI.needRender){ UI.needRender=false; render(); } }
 function toast(t){ const el=$("#toast"); el.textContent=t; el.style.display="block"; clearTimeout(toast._t); toast._t=setTimeout(()=>el.style.display="none",2200); }
 function confirmSheet(title,text,act,btn){ openSheet(`<h2>${esc(title)}</h2><p class="muted" style="margin:0">${esc(text)}</p><div class="grid2"><button class="btn" data-act="closeSheet">Annulla</button><button class="btn pri" data-act="${act}">${esc(btn)}</button></div>`); }
 
@@ -1536,6 +1538,9 @@ document.addEventListener("click",e=>{
     monthNav(){ UI.monthOff=Math.min(0,(UI.monthOff||0)+ +v); render(); const el=document.getElementById("mese"); if(el) el.scrollIntoView({block:"start"}); },
     goMonth(){ UI.monthOff=+v; UI.tab="progressi"; location.hash="progressi"; render(); const el=document.getElementById("mese"); if(el) el.scrollIntoView({block:"start"}); },
     monthShare(){ const txt=monthText(monthData(monthKey(UI.monthOff||0))); if(navigator.share){ navigator.share({text:txt}).catch(()=>{}); } else navigator.clipboard.writeText(txt).then(()=>toast("Riepilogo copiato"),()=>toast("Copia non riuscita")); },
+    fbIn(){ fbSignIn(); },
+    fbOut(){ confirmSheet("Uscire dall'account?","I dati restano su questo telefono e nel cloud. La sincronizzazione si ferma finché non rientri.","fbOutOk","Esci"); },
+    fbOutOk(){ closeSheet(); FB.auth&&FB.auth.signOut(); toast("Uscito"); },
     closeSheet(){ closeSheet(); },
     aiSheet(){ aiSheet(); },
     aiRun(){ aiRun(); },
@@ -1649,9 +1654,9 @@ function initPWA(){
   window.addEventListener("appinstalled",()=>{ INSTALL_EVT=null; toast("Athletic OS installata"); });
 }
 
-/* ---------- cloud sync (claude db) ---------- */
+/* ---------- cloud sync (claude db / firebase) ---------- */
 let COL=null, SYNC="local", dirty=new Set(), photoQueue=[], flushT=null, flushing=false;
-function syncText(){ return {local:"Dati salvati su questo telefono, anche offline.",loading:"Sincronizzazione in corso…",ok:"Dati salvati nel tuo account: li ritrovi su ogni dispositivo.",error:"Sincronizzazione non riuscita: i dati restano su questo telefono."}[SYNC]; }
+function syncText(){ return {local:"Dati salvati su questo telefono, anche offline.",signedout:"Dati solo su questo telefono: accedi con Google nel profilo per salvarli nel cloud.",loading:"Sincronizzazione in corso…",ok:"Sincronizzato: i dati sono nel tuo account e li ritrovi su ogni dispositivo.",error:"Sincronizzazione non riuscita: i dati restano su questo telefono."}[SYNC]; }
 function showSync(){ ["#syncLine","#syncLine2"].forEach(s=>{ const el=$(s); if(el) el.textContent=syncText(); }); }
 async function rget(id){
   const r=await COL.doc(id).get(); if(r==null) return null;
@@ -1665,8 +1670,8 @@ async function flush(){
   try{
     while(dirty.size){ const id=dirty.values().next().value; dirty.delete(id);
       const data= id==="core"? S.core : S.months[id.slice(2)]; if(!data) continue;
-      await COL.doc(id).set(JSON.parse(JSON.stringify(data))); }
-    while(photoQueue.length){ const id=photoQueue[0]; const img=PHOTO_MEM[id]||ls.get("athleticos.ph."+id); if(img) await COL.doc("p_"+id).set({u:Date.now(),img}); photoQueue.shift(); }
+      const pr=COL.doc(id).set(JSON.parse(JSON.stringify(data))); if(CLOUD==="fb") pr.then(()=>{ if(SYNC!=="ok"){ SYNC="ok"; showSync(); } }).catch(()=>{ SYNC="error"; showSync(); }); else await pr; }
+    while(photoQueue.length){ const id=photoQueue[0]; const img=PHOTO_MEM[id]||ls.get("athleticos.ph."+id); if(img){ const pr=COL.doc("p_"+id).set({u:Date.now(),img}); if(CLOUD!=="fb") await pr; else pr.catch(()=>{}); } photoQueue.shift(); }
     if(SYNC!=="ok"){ SYNC="ok"; showSync(); }
   }catch(e){ SYNC="error"; showSync(); setTimeout(()=>{ flushing=false; scheduleFlush(); },15000); return; }
   flushing=false;
@@ -1684,7 +1689,7 @@ async function initCloud(){
     const [db,user]=await Promise.all([claude.use("db"),claude.use("user")]);
     if(!db||!user) return;
     const id=await user.id(); if(!id) return;
-    COL=db.collection("data/users/"+id); SYNC="loading"; showSync();
+    COL=db.collection("data/users/"+id); CLOUD="claude"; SYNC="loading"; showSync();
     const timeout=new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),10000));
     const remoteCore=await Promise.race([rget("core"),timeout]);
     let changed=false;
@@ -1698,14 +1703,85 @@ async function initCloud(){
     flush();
   }catch(e){ SYNC= COL?"error":"local"; showSync(); }
 }
+/* ---------- Firebase sync (multi-device) ---------- */
+const FIREBASE_CONFIG = null; // incollato dopo la creazione del progetto Firebase
+let FB={ready:false,failed:false,user:null,unsub:null}, CLOUD=null;
+function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement("script"); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
+function safeRender(){
+  const ae=document.activeElement;
+  if(document.body.classList.contains("sheet")||(ae&&/INPUT|TEXTAREA|SELECT/.test(ae.tagName))){ UI.needRender=true; return; }
+  render();
+}
+function mergeRemote(map,initial,firstLink){
+  let changed=false;
+  const rc=map.core;
+  if(rc){
+    if(firstLink){
+      const w=new Map(S.core.weights.map(x=>[x.d,x])); (rc.weights||[]).forEach(x=>w.set(x.d,x));
+      const act=S.core.active; S.core=rc; S.core.weights=[...w.values()]; if(!S.core.active&&act) S.core.active=act; migrate(); changed=true; dirty.add("core");
+    } else if(rc.u>(S.core.u||0)){ S.core=rc; migrate(); changed=true; }
+    else if(initial) dirty.add("core");
+  } else if(initial) dirty.add("core");
+  for(const id in map){ if(!id.startsWith("m_")) continue; const m=id.slice(2), r=map[id];
+    if(firstLink&&S.months[m]){ const L=S.months[m]; for(const k in (L.days||{})) if(!r.days||!r.days[k]){ r.days=r.days||{}; r.days[k]=L.days[k]; } const ids=new Set((r.workouts||[]).map(x=>x.id)); (L.workouts||[]).forEach(x=>{ if(!ids.has(x.id)) (r.workouts=r.workouts||[]).push(x); }); r.u=Date.now(); S.months[m]=r; dirty.add(id); changed=true; }
+    else if(!S.months[m]||(r.u||0)>(S.months[m].u||0)){ S.months[m]=r; changed=true; }
+    if(!S.core.monthKeys.includes(m)) S.core.monthKeys.push(m); }
+  if(initial) for(const m in S.months){ const r=map["m_"+m]; if(!r||(S.months[m].u||0)>(r.u||0)) dirty.add("m_"+m); }
+  for(const id in map){ if(id.startsWith("p_")&&map[id]&&map[id].img){ const pid=id.slice(2); if(!PHOTO_MEM[pid]){ PHOTO_MEM[pid]=map[id].img; ls.set("athleticos.ph."+pid,map[id].img); changed=true; } } }
+  if(initial){ const have=new Set(Object.keys(map)); S.core.photos.forEach(ph=>{ if(!have.has("p_"+ph.id)&&(PHOTO_MEM[ph.id]||ls.get("athleticos.ph."+ph.id))&&!photoQueue.includes(ph.id)) photoQueue.push(ph.id); }); }
+  if(changed) saveLocal();
+  return changed;
+}
+async function initFirebase(){
+  if(!FIREBASE_CONFIG||(window.claude&&typeof window.claude.use==="function")) return;
+  try{
+    const base="https://www.gstatic.com/firebasejs/10.12.2/";
+    await loadScript(base+"firebase-app-compat.js");
+    await loadScript(base+"firebase-auth-compat.js");
+    await loadScript(base+"firebase-firestore-compat.js");
+    firebase.initializeApp(FIREBASE_CONFIG);
+    FB.auth=firebase.auth(); FB.db=firebase.firestore();
+    try{ await FB.db.enablePersistence({synchronizeTabs:true}); }catch(e){}
+    FB.ready=true;
+    FB.auth.getRedirectResult().catch(()=>{});
+    FB.auth.onAuthStateChanged(u=>{ FB.user=u; if(u) startSync(u); else { stopSync(); SYNC="signedout"; showSync(); safeRender(); } });
+  }catch(e){ FB.failed=true; if(SYNC==="local") showSync(); }
+}
+async function startSync(u){
+  CLOUD="fb"; COL=FB.db.collection("users").doc(u.uid).collection("docs"); SYNC="loading"; showSync();
+  try{
+    const snap=await COL.get(); const map={}; snap.forEach(d=>{ map[d.id]=d.data(); });
+    const firstLink=S.core.syncUid!==u.uid && !!map.core;
+    mergeRemote(map,true,firstLink);
+    if(S.core.syncUid!==u.uid){ S.core.syncUid=u.uid; S.core.u=Date.now(); dirty.add("core"); saveLocal(); }
+    SYNC="ok"; showSync(); safeRender(); flush();
+    if(FB.unsub) FB.unsub();
+    FB.unsub=COL.onSnapshot(sn=>{ const m={}; sn.docChanges().forEach(ch=>{ if(ch.type!=="removed"&&!ch.doc.metadata.hasPendingWrites) m[ch.doc.id]=ch.doc.data(); }); if(Object.keys(m).length&&mergeRemote(m,false,false)) safeRender(); },()=>{ SYNC="error"; showSync(); });
+  }catch(e){ SYNC="error"; showSync(); }
+}
+function stopSync(){ if(FB.unsub){ FB.unsub(); FB.unsub=null; } if(CLOUD==="fb"){ COL=null; CLOUD=null; } }
+async function fbSignIn(){
+  if(!FB.ready){ toast(FB.failed?"Servizio di accesso non raggiungibile: controlla la connessione":"Un attimo, sto caricando…"); return; }
+  const prov=new firebase.auth.GoogleAuthProvider(); prov.setCustomParameters({prompt:"select_account"});
+  try{ await FB.auth.signInWithPopup(prov); toast("Collegato: sincronizzo i dati"); }
+  catch(e){ const c=e&&e.code||""; if(c==="auth/popup-blocked"||c==="auth/operation-not-supported-in-this-environment") FB.auth.signInWithRedirect(prov); else if(!/popup-closed|cancelled-popup/.test(c)) toast("Accesso non riuscito ("+c+")"); }
+}
+function syncCard(){
+  if(!FIREBASE_CONFIG) return `<p class="small muted" style="margin:0">Sincronizzazione tra dispositivi: in configurazione.</p>`;
+  if(FB.user) return `<div class="row between"><div style="min-width:0"><div class="t">Sincronizzazione attiva</div><div class="small muted" style="overflow-wrap:anywhere">${esc(FB.user.email||"")}</div></div><button class="btn sm ghost" data-act="fbOut">Esci</button></div>`;
+  return `<div class="t">Salva tutto nel cloud</div><p class="small muted" style="margin:0">Accedi con Google: i dati si sincronizzano su tutti i tuoi dispositivi e, se cambi telefono o reinstalli l'app, ritrovi tutto.</p><button class="btn pri block" data-act="fbIn">Accedi con Google</button>`;
+}
+
 document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="hidden") flush(); });
 
+document.addEventListener("focusout",()=>{ if(UI.needRender) setTimeout(()=>{ const ae=document.activeElement; if(UI.needRender&&!document.body.classList.contains("sheet")&&!(ae&&/INPUT|TEXTAREA|SELECT/.test(ae.tagName))){ UI.needRender=false; render(); } },300); });
 document.addEventListener("keydown",e=>{ if(e.key!=="Enter") return;
   if(e.target.id==="shopIn"){ e.preventDefault(); const b=document.querySelector('[data-act="shopAdd"]'); if(b) b.click(); }
   if(e.target.id==="scanCode"){ e.preventDefault(); stopCam(); lookupCode(e.target.value); } });
 render();
 initPWA();
 initCloud();
+initFirebase();
 </script>
 </body>
 </html>

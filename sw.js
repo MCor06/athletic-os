@@ -1,5 +1,5 @@
 /* Athletic OS service worker: app shell offline, fonts cached on first use. */
-const VERSION = "aos-v5";
+const VERSION = "aos-v6";
 const SHELL = [
   "./",
   "./index.html",
@@ -37,8 +37,8 @@ self.addEventListener("fetch", event => {
     return;
   }
 
-  // Google Fonts: serve from cache, refresh in background.
-  if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") {
+  // Google Fonts and Firebase SDK: serve from cache, refresh in background.
+  if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com" || (url.hostname === "www.gstatic.com" && url.pathname.startsWith("/firebasejs/"))) {
     event.respondWith(
       caches.open(VERSION).then(c => c.match(req).then(hit => {
         const net = fetch(req).then(res => { c.put(req, res.clone()); return res; }).catch(() => hit);
