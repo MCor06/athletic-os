@@ -359,7 +359,7 @@ try{ S = JSON.parse(ls.get(LS)) || fresh(); }catch(e){ S = fresh(); }
 if(!S.core||!S.months) S=fresh();
 migrate();
 if(S.core.profile && !S.core.profile.weekV){ if(S.core.profile.week.join()==="basket,pesi,basket,pesi,basket,pesi,basket") S.core.profile.week=["pesi","basket","pesi","basket","pesi","riposo","riposo"]; S.core.profile.weekV=2; S.core.u=Date.now(); }
-const UI = {tab:(location.hash||"#oggi").slice(1), progRange:30, weekOff:0};
+const UI = {tab:(location.hash||"#oggi").slice(1), progRange:30, weekOff:0, monthOff:0};
 if(!["oggi","allena","cibo","progressi","profilo"].includes(UI.tab)) UI.tab="oggi";
 
 function saveLocal(){ ls.set(LS, JSON.stringify(S)); }
@@ -933,6 +933,65 @@ function exportCsv(){
   toast("CSV scaricato: aprilo da Google Sheets con File › Importa");
 }
 
+/* ---------- backup to Drive (share sheet) ---------- */
+function backupText(){ const photos={}; S.core.photos.forEach(p=>{ const v=PHOTO_MEM[p.id]||ls.get("athleticos.ph."+p.id); if(v) photos[p.id]=v; });
+  return JSON.stringify({app:"athletic-os",v:1,at:new Date().toISOString(),data:S,photos}); }
+function downloadBackup(){
+  const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([backupText()],{type:"application/json"})); a.download="athletic-os-backup-"+dk()+".json";
+  document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},2000);
+  S.core.lastBackup=Date.now(); touch("core"); toast("Backup scaricato");
+}
+async function shareBackup(){
+  const file=new File([backupText()],"athletic-os-backup-"+dk()+".txt",{type:"text/plain"});
+  if(navigator.canShare&&navigator.canShare({files:[file]})){
+    try{ await navigator.share({files:[file],title:"Backup Athletic OS"}); S.core.lastBackup=Date.now(); touch("core"); render(); toast("Backup salvato"); }
+    catch(e){ if(e&&e.name!=="AbortError"){ downloadBackup(); render(); } }
+  } else { downloadBackup(); render(); }
+}
+
+/* ---------- sleep from times ---------- */
+function sleepHours(bed,wake){ const m=t=>{ const [h,mi]=String(t||"0:0").split(":").map(Number); return h*60+mi; }; let d=m(wake)-m(bed); if(d<=0) d+=1440; return Math.round(d/15)/4; }
+function sleepSheet(){
+  const d=day(), b=d.bed||S.core.lastBed||"23:30", w=d.wake||S.core.lastWake||"07:30";
+  openSheet(`<h2>Sonno stanotte</h2><div class="grid2"><label class="f" for="slBed">A letto alle<input id="slBed" type="time" value="${b}"></label><label class="f" for="slWake">Sveglia alle<input id="slWake" type="time" value="${w}"></label></div>
+  <div class="big" id="slCalc" style="font-size:40px;text-align:center">${fmt(sleepHours(b,w),2)} h</div>
+  <p class="small dim" style="margin:0">Conta da quando spegni il telefono, non da quando vai a letto.</p>
+  <button class="btn pri block" data-act="sleepSave">Salva</button>`);
+}
+
+/* ---------- monthly summary ---------- */
+function monthKey(off){ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()+off); return d.getFullYear()+"-"+pad(d.getMonth()+1); }
+const monthLabel = ym => { const [y,m]=ym.split("-").map(Number); const s=new Date(y,m-1,1).toLocaleDateString("it-IT",{month:"long",year:"numeric"}); return s[0].toUpperCase()+s.slice(1); };
+function monthData(ym){
+  const [y,m]=ym.split("-").map(Number), start=ym+"-01", end=dk(new Date(y,m,0)), today=dk(), last=end<today?end:today;
+  const w0=avgRange(start,addDays(start,6)), w1=avgRange(addDays(last,-6),last);
+  const ms=S.core.measures.filter(x=>x.d>=start&&x.d<=end&&x.vita).sort((a,b)=>a.d<b.d?-1:1);
+  const vita=ms.length>1?ms[ms.length-1].vita-ms[0].vita:null;
+  const bfs=ms.map(x=>({x,f:bodyFat(x)})).filter(o=>o.f!=null), lean=bfs.length>1?(weightAt(bfs[bfs.length-1].x.d)*(1-bfs[bfs.length-1].f/100))-(weightAt(bfs[0].x.d)*(1-bfs[0].f/100)):null;
+  const wk=allWorkouts().filter(x=>x.d>=start&&x.d<=end).length;
+  const bk=allBk().filter(b=>b.d>=start&&b.d<=end);
+  const sh=allSh().filter(s=>s.d>=start&&s.d<=end), tl=shPct(sh,"tl"), tre=shPct(sh,"tre");
+  const days=[]; for(let k=start;k<=last;k=addDays(k,1)) days.push(k);
+  const ld=days.filter(k=>{ const d=peekDay(k); return d&&d.meals.length; }), tt=ld.map(k=>totals(peekDay(k)));
+  return {ym,start,end,days:days.length,w0,w1,vita,lean,wk,bkN:bk.length,bkMin:bk.reduce((a,b)=>a+(+b.min||0),0),tl,tre,logged:ld.length,
+    kcal:tt.length?tt.reduce((a,x)=>a+x.kcal,0)/tt.length:null,p:tt.length?tt.reduce((a,x)=>a+x.p,0)/tt.length:null};
+}
+const sgn = (v,d=1) => (v>0?"+":v<0?"−":"")+fmt(Math.abs(v),d);
+function monthHtml(M,compact){
+  const T=[["Peso",M.w1!=null?fmt(M.w1,1)+" kg":"–",M.w0!=null&&M.w1!=null?`${sgn(M.w1-M.w0)} kg nel mese`:""],
+    ["Vita",M.vita!=null?sgn(M.vita)+" cm":"–",M.lean!=null?`massa magra ${sgn(M.lean)} kg`:"servono 2 misure nel mese"],
+    ["Allenamenti",String(M.wk),`${M.bkN} basket · ${M.bkMin} min`],
+    ["Tiro",M.tl?Math.round(M.tl.p*100)+"% TL":"–",M.tre?`${Math.round(M.tre.p*100)}% da tre`:""],
+    ["Kcal medie",M.kcal!=null?fmt(M.kcal):"–",`${M.logged}/${M.days} giorni registrati`],
+    ["Proteine medie",M.p!=null?fmt(M.p)+" g":"–",`obiettivo ${baseTargets().prot} g`]];
+  return `<div class="grid2">${(compact?T.slice(0,4):T).map(([l,v,s])=>`<div class="tile"><span class="lbl">${l}</span><span class="big" style="font-size:24px">${v}</span>${s?`<span class="small muted">${s}</span>`:""}</div>`).join("")}</div>`;
+}
+function monthText(M){
+  return [`Athletic OS · ${monthLabel(M.ym)}`, M.w0!=null&&M.w1!=null?`Peso: ${fmt(M.w0,1)} → ${fmt(M.w1,1)} kg (${sgn(M.w1-M.w0)})`:null, M.vita!=null?`Vita: ${sgn(M.vita)} cm`:null,
+    `Allenamenti: ${M.wk} · basket ${M.bkN} sessioni (${M.bkMin} min)`, M.tl?`Tiri liberi: ${Math.round(M.tl.p*100)}% (${M.tl.m}/${M.tl.a})`:null, M.tre?`Da tre: ${Math.round(M.tre.p*100)}% (${M.tre.m}/${M.tre.a})`:null,
+    M.p!=null?`Proteine medie: ${fmt(M.p)} g`:null].filter(Boolean).join("\n");
+}
+
 /* ---------- render ---------- */
 const TABS=[["oggi","Oggi","today"],["allena","Allena","train"],["cibo","Cibo","food"],["progressi","Progressi","prog"],["profilo","Profilo","me"]];
 function render(){
@@ -956,6 +1015,7 @@ function vToday(){
   const pl=plannedType(k), nx=nextWorkout(), doneToday=allWorkouts().filter(w=>w.d===k), bk=d.bk||[];
   const wToday=S.core.weights.find(w=>w.d===k);
   const c=coach();
+  const simple=!!p.simple;
   let plan; const pz=pausedOn(k);
   if(pz&&!S.core.active){
     plan=`<div class="card hi"><div class="eyebrow">In pausa · ${esc(pz.why||"")}</div><h2>Fino al ${dateShort(pz.to)}</h2><p class="muted" style="margin:0">La serie di giorni non si interrompe e il coach non tocca le calorie. Riprendi quando vuoi.</p><button class="btn pri block" data-act="pauseEnd">Riprendi oggi</button></div>`;
@@ -983,8 +1043,9 @@ function vToday(){
     <div style="text-align:right"><div class="big" style="font-size:34px;line-height:1">${streak()}</div><div class="eyebrow">giorni di fila</div></div></header>
   ${!S.core.setup?`<div class="card"><div class="eyebrow">Primo avvio</div><p style="margin:0">Hai già usato Athletic OS? Importa il backup e ritrovi tutto. Altrimenti inserisci età, altezza, peso e obiettivo nel profilo: calorie e proteine si calcolano da lì.</p><div class="row wrap"><button class="btn sm pri" data-act="importSheet">Importa backup</button><button class="btn sm" data-act="tab" data-v="profilo">Inserisci i dati</button><button class="btn sm ghost" data-act="dismissSetup">Chiudi</button></div></div>`:""}
   ${plan}
-  ${weekStrip()}
-  ${extra}
+  ${simple?"":weekStrip()}
+  ${simple?"":extra}
+  ${(()=>{ const dd=new Date().getDate(); if(dd>3) return ""; const M=monthData(monthKey(-1)); return `<div class="card"><div class="row between"><div class="eyebrow">${monthLabel(M.ym)} in breve</div><button class="btn sm" data-act="goMonth" data-v="-1">Dettagli</button></div>${monthHtml(M,true)}</div>`; })()}
   <div class="card"><div class="row between"><div class="eyebrow">Alimentazione</div><button class="btn sm" data-act="tab" data-v="cibo">Registra</button></div>
     <div class="row" style="gap:16px">${ring(tot.kcal/t.kcal,118,10,`<b>${fmt(Math.max(0,t.kcal-tot.kcal))}</b><span>kcal rimaste</span>`)}
       <div style="flex:1;display:flex;flex-direction:column;gap:10px">
@@ -992,18 +1053,20 @@ function vToday(){
         <div><div class="row between small"><span>Carboidrati</span><span class="num">${fmt(tot.c)} / ${t.carb} g</span></div>${bar(tot.c/t.carb)}</div>
         <div><div class="row between small"><span>Grassi</span><span class="num">${fmt(tot.f)} / ${t.fat} g</span></div>${bar(tot.f/t.fat)}</div>
       </div></div></div>
-  <div class="grid2">
+  ${simple?planTodayCard():""}
+  ${simple?"":`<div class="grid2">
     <div class="card" style="gap:8px"><div class="eyebrow">Acqua</div><div class="big" style="font-size:30px">${fmt(d.water,2)} <span class="small muted">/ ${fmt(p.water,1)} L</span></div>${bar(d.water/p.water)}
       <div class="row"><button class="btn sm" style="flex:1" data-act="water" data-v="-0.25" aria-label="Togli un bicchiere">−</button><button class="btn sm pri" style="flex:2" data-act="water" data-v="0.25">+250 ml</button></div></div>
     <div class="card" style="gap:8px"><div class="eyebrow">Sonno stanotte</div><div class="big" style="font-size:30px">${d.sleep==null?"–":fmt(d.sleep,1)} <span class="small muted">/ ${p.sleep} h</span></div>${bar((d.sleep||0)/p.sleep)}
-      <div class="row"><button class="btn sm" style="flex:1" data-act="sleep" data-v="-0.5" aria-label="Meno sonno">−</button><button class="btn sm" style="flex:1" data-act="sleep" data-v="0.5" aria-label="Più sonno">+</button></div></div>
-  </div>
+      <div class="row"><button class="btn sm" style="flex:1" data-act="sleep" data-v="-0.5" aria-label="Meno sonno">−</button><button class="btn sm" style="flex:1" data-act="sleep" data-v="0.5" aria-label="Più sonno">+</button></div><button class="btn sm ghost" data-act="sleepSheet">${d.bed?`${d.bed} → ${d.wake}`:"Inserisci orari"}</button></div>
+  </div>`}
   <div class="card"><div class="row between"><div class="eyebrow">Peso di oggi</div>${wToday?`<span class="pill ok">${fmt(wToday.kg,1)} kg</span>`:""}</div>
     <div class="row"><input id="wq" type="number" inputmode="decimal" step="0.1" placeholder="${fmt(currentWeight(),1)}" value="${wToday?wToday.kg:""}" aria-label="Peso in kg"><button class="btn pri" data-act="saveW">Salva</button></div>
     <p class="small muted" style="margin:0">${esc(c.msg)}</p>${c.act?`<button class="btn sm" data-act="coachAdj" data-v="${c.act}">${c.act<0?"Togli":"Aggiungi"} 150 kcal al giorno</button>`:""}</div>
-  <div class="card"><div class="row between"><div class="eyebrow">Abitudini</div><span class="num muted">${habitsDone}/${S.core.habits.length}</span></div>
-    <div class="list">${S.core.habits.map((h,i)=>`<div class="li"><button class="check ${d.habits[i]?"on":""}" data-act="habit" data-v="${i}" aria-label="${esc(h)}">${d.habits[i]?IC.tick:""}</button><div class="grow">${esc(h)}</div></div>`).join("")}</div></div>
-  ${(S.core.weights.length||allWorkouts().length)&&(!S.core.lastBackup||Date.now()-S.core.lastBackup>14*864e5)?`<div class="card"><div class="row between"><div><div class="eyebrow">Backup</div><div class="small muted">${S.core.lastBackup?"Sono passate più di 2 settimane dall'ultimo backup.":"Non hai ancora fatto un backup dei tuoi progressi."}</div></div><button class="btn sm" data-act="exportSheet">Fai backup</button></div></div>`:""}
+  ${simple?"":`<div class="card"><div class="row between"><div class="eyebrow">Abitudini</div><span class="num muted">${habitsDone}/${S.core.habits.length}</span></div>
+    <div class="list">${S.core.habits.map((h,i)=>`<div class="li"><button class="check ${d.habits[i]?"on":""}" data-act="habit" data-v="${i}" aria-label="${esc(h)}">${d.habits[i]?IC.tick:""}</button><div class="grow">${esc(h)}</div></div>`).join("")}</div></div>`}
+  ${(S.core.weights.length||allWorkouts().length)&&(!S.core.lastBackup||Date.now()-S.core.lastBackup>7*864e5)?`<div class="card"><div class="row between"><div><div class="eyebrow">Backup della settimana</div><div class="small muted">${S.core.lastBackup?"Ultimo il "+dateShort(dk(new Date(S.core.lastBackup)))+". ":""}Un tocco e lo salvi su Google Drive.</div></div><button class="btn sm pri" data-act="backupShare">Salva</button></div></div>`:""}
+  <button class="btn sm ghost block" data-act="simple">${simple?"Mostra tutto":"Passa alla modalità essenziale"}</button>
   <div class="sync" id="syncLine">${syncText()}</div>`;
 }
 function weekStrip(){
@@ -1088,10 +1151,10 @@ function vFood(){
   ${bySlot.length?bySlot.map(([s,ms])=>`<div class="card"><div class="row between"><div class="eyebrow">${s}</div><span class="num small muted">${fmt(ms.reduce((a,m)=>a+(+m.kcal||0),0))} kcal</span></div>
     <div class="list">${ms.map(m=>`<div class="li"><div class="grow"><div class="t">${esc(m.name)}</div><div class="small muted num">${fmt(m.kcal)} kcal · P ${fmt(m.p)} · C ${fmt(m.c)} · G ${fmt(m.f)}</div></div><button class="x" data-act="delMeal" data-v="${m.id}" aria-label="Elimina pasto">${IC.x}</button></div>`).join("")}</div></div>`).join("")
    :`<div class="card"><p class="small muted" style="margin:0">Nessun pasto registrato oggi. Se proprio non hai voglia di contare, spunta almeno le abitudini nella schermata Oggi: valgono per la serie di giorni.</p></div>`}
-  <div class="card"><div class="eyebrow">Organizza</div><div class="grid3"><button class="btn sm" data-act="planSheet">Piano</button><button class="btn sm" data-act="recipes">Ricette</button><button class="btn sm" data-act="shopSheet">Spesa${S.core.shop.filter(x=>!x.done).length?" · "+S.core.shop.filter(x=>!x.done).length:""}</button></div></div>
-  <div class="card" id="ideas"><div class="row between"><div class="eyebrow">Cosa mangiare adesso</div><span class="small muted num">${fmt(Math.max(0,left.kcal))} kcal · ${fmt(Math.max(0,left.p))} g prot. rimaste</span></div>
+  ${S.core.profile.simple?"":`<div class="card"><div class="eyebrow">Organizza</div><div class="grid3"><button class="btn sm" data-act="planSheet">Piano</button><button class="btn sm" data-act="recipes">Ricette</button><button class="btn sm" data-act="shopSheet">Spesa${S.core.shop.filter(x=>!x.done).length?" · "+S.core.shop.filter(x=>!x.done).length:""}</button></div></div>`}
+  ${S.core.profile.simple?"":`<div class="card" id="ideas"><div class="row between"><div class="eyebrow">Cosa mangiare adesso</div><span class="small muted num">${fmt(Math.max(0,left.kcal))} kcal · ${fmt(Math.max(0,left.p))} g prot. rimaste</span></div>
     ${ideasHtml(left)}
-    ${HAS_AI?`<button class="btn sm" data-act="aiIdeas">${IC.spark} Idee su misura da Claude</button>`:""}</div>`;
+    ${HAS_AI?`<button class="btn sm" data-act="aiIdeas">${IC.spark} Idee su misura da Claude</button>`:""}</div>`}`;
 }
 let AI_IDEAS=null;
 function ideasHtml(left){
@@ -1158,6 +1221,7 @@ function vProg(){
     <div style="text-align:center"><div class="eyebrow" style="justify-content:center">${(UI.weekOff||0)===0?"Questa settimana":(UI.weekOff===-1?"Settimana scorsa":"Riepilogo")}</div><div class="small muted num">${dateShort(wk.start)} – ${dateShort(wk.end)}</div></div>
     <button class="btn sm" data-act="weekNav" data-v="1" ${(UI.weekOff||0)>=0?"disabled":""} aria-label="Settimana successiva">›</button></div>
     ${weekHtml(wk,false)}</div>
+  ${(()=>{ const M=monthData(monthKey(UI.monthOff||0)); return `<div class="card" id="mese"><div class="row between"><button class="btn sm" data-act="monthNav" data-v="-1" aria-label="Mese precedente">‹</button><div style="text-align:center"><div class="eyebrow" style="justify-content:center">Mese</div><div class="small muted">${monthLabel(M.ym)}</div></div><button class="btn sm" data-act="monthNav" data-v="1" ${(UI.monthOff||0)>=0?"disabled":""} aria-label="Mese successivo">›</button></div>${monthHtml(M,false)}<button class="btn sm block" data-act="monthShare">Condividi il riepilogo</button></div>`; })()}
   <div class="grid3">
     <div class="tile"><span class="lbl">Media 7 gg</span><span class="big">${fmt(a1,1)}</span></div>
     <div class="tile"><span class="lbl">Dall'inizio</span><span class="big">${cur-start>0?"+":""}${fmt(cur-start,1)}</span></div>
@@ -1212,6 +1276,7 @@ function vMe(){
   <div class="card"><div class="eyebrow">Allenamento</div>
     <div class="row between"><div><div class="t">Modalità esami</div><div class="small muted">Allenamenti da 20 minuti: 4 esercizi × 2 serie</div></div><button class="chip ${p.examMode?"on":""}" data-act="exam">${p.examMode?"Attiva":"Spenta"}</button></div>
     <div class="row between"><div><div class="t">Programma</div><div class="small muted">Casa e parchetto, oppure palestra</div></div><div class="row" style="gap:6px"><button class="chip ${p.prog!=="gym"?"on":""}" data-act="prog" data-v="home">Casa</button><button class="chip ${p.prog==="gym"?"on":""}" data-act="prog" data-v="gym">Palestra</button></div></div>
+    <div class="row between"><div><div class="t">Modalità essenziale</div><div class="small muted">Oggi e Cibo mostrano solo allenamento, peso e piano pasti</div></div><button class="chip ${p.simple?"on":""}" data-act="simple">${p.simple?"Attiva":"Spenta"}</button></div>
     <label class="f" for="pf_stats">Link del sito statistiche partite<input id="pf_stats" type="text" inputmode="url" data-pf="statsUrl" value="${esc(p.statsUrl||"")}" placeholder="https://…"></label></div>
   <div class="card"><div class="eyebrow">Esami</div><p class="small muted" style="margin:0">Nei 10 giorni prima di ogni esame la modalità esami si attiva da sola.</p>
     ${S.core.exams.length?`<div class="list">${S.core.exams.slice().sort((a,b)=>a.d<b.d?-1:1).map(e=>`<div class="li"><div class="grow"><div class="t">${esc(e.name)}</div><div class="small muted">${dateShort(e.d)}${e.d<dk()?" · passato":""}</div></div><button class="x" data-act="exDel" data-v="${e.id}" aria-label="Elimina esame">${IC.x}</button></div>`).join("")}</div>`:""}
@@ -1231,7 +1296,9 @@ function vMe(){
     <p class="small muted" style="margin:0" id="syncLine2">${syncText()}</p>
     <p class="small muted" style="margin:0">${S.core.lastBackup?`Ultimo backup: ${dateShort(dk(new Date(S.core.lastBackup)))}`:"Nessun backup ancora."} ${PERSIST===true?"Archiviazione persistente attiva: il telefono non cancella i dati da solo.":PERSIST===false?"Il browser non ha confermato l'archiviazione persistente: installa l'app e fai backup regolari.":""}</p>
     ${INSTALL_EVT?`<button class="btn pri block" data-act="install">Installa Athletic OS sul telefono</button>`:""}
-    <div class="grid2"><button class="btn sm" data-act="exportSheet">Esporta backup</button><button class="btn sm" data-act="importSheet">Importa backup</button></div>
+    <button class="btn pri block" data-act="backupShare">Salva il backup su Google Drive</button>
+    <p class="small dim" style="margin:0">Si apre la condivisione di Android: scegli “Salva su Drive” e una cartella, per esempio “Athletic OS”. L'app te lo ricorda ogni settimana.</p>
+    <div class="grid2"><button class="btn sm" data-act="exportSheet">Altre opzioni</button><button class="btn sm" data-act="importSheet">Importa backup</button></div>
     <button class="btn sm block" data-act="csv">Esporta per Google Sheets (CSV)</button>
     <button class="btn sm ghost" data-act="resetAll">Cancella tutti i dati</button></div>
   <p class="small dim" style="margin:0;padding:0 4px">Athletic OS dà stime indicative, non sostituisce un medico o un nutrizionista. Se hai dolori durante un esercizio, torna al livello precedente.</p>`;
@@ -1462,6 +1529,13 @@ document.addEventListener("click",e=>{
     exDel(){ S.core.exams=S.core.exams.filter(e=>e.id!==v); touch("core"); render(); },
     cmpSheet(){ cmpSheet(); },
     csv(){ exportCsv(); },
+    backupShare(){ shareBackup(); },
+    simple(){ S.core.profile.simple=!S.core.profile.simple; touch("core"); render(); window.scrollTo(0,0); toast(S.core.profile.simple?"Modalità essenziale":"Modalità completa"); },
+    sleepSheet(){ sleepSheet(); },
+    sleepSave(){ const b=$("#slBed").value, w=$("#slWake").value; if(!b||!w) return; const d=day(k); d.sleep=sleepHours(b,w); d.bed=b; d.wake=w; S.core.lastBed=b; S.core.lastWake=w; touchDay(k); touch("core"); closeSheet(); render(); toast(`${fmt(d.sleep,2)} ore di sonno`); },
+    monthNav(){ UI.monthOff=Math.min(0,(UI.monthOff||0)+ +v); render(); const el=document.getElementById("mese"); if(el) el.scrollIntoView({block:"start"}); },
+    goMonth(){ UI.monthOff=+v; UI.tab="progressi"; location.hash="progressi"; render(); const el=document.getElementById("mese"); if(el) el.scrollIntoView({block:"start"}); },
+    monthShare(){ const txt=monthText(monthData(monthKey(UI.monthOff||0))); if(navigator.share){ navigator.share({text:txt}).catch(()=>{}); } else navigator.clipboard.writeText(txt).then(()=>toast("Riepilogo copiato"),()=>toast("Copia non riuscita")); },
     closeSheet(){ closeSheet(); },
     aiSheet(){ aiSheet(); },
     aiRun(){ aiRun(); },
@@ -1492,15 +1566,13 @@ document.addEventListener("click",e=>{
     delPhotoOk(){ const id=UI.delP; S.core.photos=S.core.photos.filter(p=>p.id!==id); ls.del("athleticos.ph."+id); delete PHOTO_MEM[id]; touch("core"); if(COL) COL.doc("p_"+id).delete().catch(()=>{}); closeSheet(); render(); },
     week(){ S.core.profile.week[+el.dataset.i]=v; touch("core"); render(); },
     exportSheet(){ S.core.lastBackup=Date.now(); touch("core"); const txt=JSON.stringify(S); openSheet(`<h2>Backup</h2>
-      <button class="btn pri block" data-act="dlBackup">Scarica file di backup (con foto)</button>
+      <button class="btn pri block" data-act="backupShare">Salva su Google Drive</button><button class="btn block" data-act="dlBackup">Scarica file di backup (con foto)</button>
       <p class="small muted" style="margin:0">Salvalo su Drive o mandalo a te stesso. In alternativa copia il testo qui sotto (senza foto).</p>
       <textarea id="expTx" readonly style="min-height:120px;font-size:12px">${esc(txt)}</textarea><button class="btn block" data-act="copyExp">Copia testo</button>`); },
-    dlBackup(){ const photos={}; S.core.photos.forEach(p=>{ const v=PHOTO_MEM[p.id]||ls.get("athleticos.ph."+p.id); if(v) photos[p.id]=v; });
-      const blob=new Blob([JSON.stringify({app:"athletic-os",v:1,at:new Date().toISOString(),data:S,photos})],{type:"application/json"});
-      const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="athletic-os-backup-"+dk()+".json"; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},2000); toast("Backup scaricato"); },
+    dlBackup(){ downloadBackup(); },
     copyExp(){ const t=$("#expTx"); navigator.clipboard.writeText(t.value).then(()=>toast("Copiato"),()=>{ t.select(); toast("Seleziona e copia a mano"); }); },
     importSheet(){ openSheet(`<h2>Importa backup</h2><p class="small muted" style="margin:0">Scegli il file di backup oppure incolla il testo. I dati di questo telefono vengono sostituiti da quelli del backup.</p>
-      <label class="btn block" for="impFile">Scegli file .json</label><input id="impFile" type="file" accept="application/json,.json" hidden>
+      <label class="btn block" for="impFile">Scegli il file di backup</label><input id="impFile" type="file" accept="application/json,.json,text/plain,.txt" hidden>
       <textarea id="impTx" style="min-height:120px;font-size:12px" placeholder="…oppure incolla qui il testo copiato"></textarea><button class="btn pri block" data-act="doImport">Importa testo</button>`); },
     doImport(){ importBackup($("#impTx").value); },
     addFood(){ const f=FOODS[+v]; AI_ITEMS.push(foodItem(+v,f[5])); $("#aiOut").innerHTML=aiOutHtml(); const q=$("#foodQ"); if(q){ q.value=""; renderFoodRes(); } toast("Nel piatto: correggi i grammi se serve"); },
@@ -1519,6 +1591,7 @@ document.addEventListener("input",e=>{
   const el=e.target;
   if(el.dataset.in && S.core.active){ const s=S.core.active.ex[el.dataset.id][+el.dataset.j]; s[el.dataset.in]=el.value; touch("core"); }
   if(el.id==="foodQ") renderFoodRes();
+  if(el.id==="slBed"||el.id==="slWake"){ const c=$("#slCalc"); if(c) c.textContent=fmt(sleepHours($("#slBed").value,$("#slWake").value),2)+" h"; }
   if(el.id==="cmpR"){ const t=$("#cmpTop"), l=$("#cmpLine"); if(t) t.style.clipPath=`inset(0 0 0 ${el.value}%)`; if(l) l.style.left=el.value+"%"; }
   if(el.id==="painLvl"){ UI.painLvl=+el.value; const pv=$("#painV"); if(pv) pv.textContent=el.value; }
   if(el.dataset.ai){ const it=AI_ITEMS[+el.dataset.i]; if(it){ it[el.dataset.ai]= el.dataset.ai==="name"? el.value : +el.value; } }
