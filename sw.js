@@ -1,5 +1,5 @@
 /* Athletic OS service worker: app shell offline, fonts cached on first use. */
-const VERSION = "aos-v3";
+const VERSION = "aos-v4";
 const SHELL = [
   "./",
   "./index.html",
