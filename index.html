@@ -695,6 +695,8 @@ function migrate(){
   if(!p.sex) p.sex="M";
   S.core.products=S.core.products||{}; S.core.shop=S.core.shop||[]; S.core.tests=S.core.tests||[];
   S.core.plans=S.core.plans||{}; S.core.badges=S.core.badges||[]; S.core.pain=S.core.pain||[]; S.core.pauses=S.core.pauses||[]; S.core.exams=S.core.exams||[]; if(!p.prog) p.prog="home";
+  if(!p.mensa) p.mensa={on:true,days:[0,1,2],price:4.7};
+  if(!p.dessert) p.dessert={on:true,kcal:150};
 }
 
 /* ---------- recipes ---------- */
@@ -750,10 +752,10 @@ function mealPool(slot){
   const want=slot==="Pranzo"||slot==="Cena"?"Pasto":slot;
   const m=all.filter(x=>x.slot===want||x.slot===slot&&x.kcal>0); return (m.length?m:all).filter(x=>x.kcal>0);
 }
-function planItem(e){ if(!e) return null; const it=e.src==="r"?recipeById(e.id):S.core.favs.find(f=>f.id===e.id); return it||null; }
+function planItem(e){ if(!e) return null; if(e.src==="mensa") return {name:"Pranzo in mensa",mensa:true,kcal:0,p:0,c:0,f:0}; const it=e.src==="r"?recipeById(e.id):S.core.favs.find(f=>f.id===e.id); return it||null; }
 function scoreFor(x,target,avoid,used){ const q=clamp(Math.round(target/x.kcal*4)/4,0.75,1.5); return {q,s:Math.abs(x.kcal*q-target)-x.p*q*2+(avoid&&avoid===x.id?400:0)+(used[x.id]||0)*90}; }
 function pickMeal(k,slot,used,avoid,skip){
-  const target=targets(k).kcal*SHARE[slot];
+  const target=(targets(k).kcal-dessertBudget())*SHARE[slot];
   const c=mealPool(slot).map(x=>({x,...scoreFor(x,target,avoid,used)})).filter(o=>!skip||o.x.id!==skip).sort((a,b)=>a.s-b.s);
   if(!c.length) return null;
   const o=skip? c[Math.floor(Math.random()*Math.min(4,c.length))] : c[0];
@@ -764,28 +766,31 @@ function genPlan(ws){
   for(let i=0;i<7;i++){ const k=addDays(ws,i); plan[k]={};
     for(const sl of SLOTS){ const e=pickMeal(k,sl,used,prev[sl]); if(e){ plan[k][sl]=e; used[e.id]=(used[e.id]||0)+1; } }
     prev=Object.fromEntries(SLOTS.map(sl=>[sl,plan[k][sl]&&plan[k][sl].id])); }
-  S.core.plans[ws]=plan;
+  S.core.plans[ws]=plan; applyMensa(ws);
   const keep=Object.keys(S.core.plans).sort().slice(-3); for(const w in S.core.plans) if(!keep.includes(w)) delete S.core.plans[w];
   touch("core");
 }
 const curPlan = (k=dk()) => (S.core.plans[weekStartOf(k)]||{})[k];
-const planKcal = e => { const it=planItem(e); return it? it.kcal*e.q : 0; };
+const planKcal = e => { const it=planItem(e); return it&&!it.mensa? it.kcal*e.q : 0; };
 function planLine(k,sl,e,withEat){
+  if(e&&e.src==="mensa") return mensaLine(k,withEat);
   const it=planItem(e), d=peekDay(k), done=d&&d.planDone&&d.planDone[sl];
-  return `<div class="li"><div class="grow"><div class="eyebrow" style="font-size:10px">${sl}</div><div class="t">${it?esc(it.name):"—"}${e&&e.q!==1?` <span class="muted">×${fmt(e.q,2)}</span>`:""}</div>${it?`<div class="small muted num">${fmt(it.kcal*e.q)} kcal · ${fmt(it.p*e.q)} g P</div>`:""}</div>
-   <button class="x" data-act="planSwap" data-v="${k}|${sl}" aria-label="Cambia pasto">${IC.redo}</button>
+  return `<div class="li"><div class="grow"><div class="eyebrow" style="font-size:10px">${sl}${e&&e.man&&isMensaDay(k)?" · oggi niente mensa":""}</div><div class="t">${it?esc(it.name):"—"}${e&&e.q!==1?` <span class="muted">×${fmt(e.q,2)}</span>`:""}</div>${it?`<div class="small muted num">${fmt(it.kcal*e.q)} kcal · ${fmt(it.p*e.q)} g P</div>`:""}</div>
+   <button class="x" data-act="planSwap" data-v="${k}|${sl}" aria-label="${e&&e.man&&isMensaDay(k)?"Torna alla mensa":"Cambia pasto"}">${IC.redo}</button>
    ${withEat?(done?`<span class="pill ok">fatto</span>`:`<button class="btn sm" data-act="planEat" data-v="${sl}">Mangiato</button>`):""}</div>`;
 }
 function planTodayCard(){
-  const k=dk(), P=curPlan(k);
-  if(!P) return `<div class="card"><div class="eyebrow">Piano pasti</div><p class="small muted" style="margin:0">Fatti preparare la settimana: pasti presi dai tuoi preferiti e dalle ricette, già dentro le calorie di ogni giorno. Poi registri con un tocco.</p><button class="btn pri block" data-act="planGen" data-v="${weekStartOf(k)}">Genera il piano della settimana</button></div>`;
+  const k=dk(); applyMensa(weekStartOf(k)); const P=curPlan(k), mz=isMensaDay(k), ds=dessertBudget()>0;
+  if(!P) return `<div class="card"><div class="eyebrow">Piano pasti</div>
+   ${mz||ds?`<div class="list">${mz?mensaLine(k,true):""}${ds?dessertLine(k):""}</div>`:""}
+   <p class="small muted" style="margin:0">Fatti preparare la settimana: pasti presi dai tuoi preferiti e dalle ricette, già dentro le calorie di ogni giorno. Poi registri con un tocco.</p><button class="btn pri block" data-act="planGen" data-v="${weekStartOf(k)}">Genera il piano della settimana</button></div>`;
   const tot=SLOTS.reduce((a,sl)=>a+planKcal(P[sl]),0);
   return `<div class="card"><div class="row between"><div class="eyebrow">Piano di oggi</div><button class="btn sm" data-act="planSheet">Settimana</button></div>
-   <div class="list">${SLOTS.map(sl=>planLine(k,sl,P[sl],true)).join("")}</div>
-   <p class="small dim" style="margin:0">Previsto ${fmt(tot)} kcal su ${fmt(targets(k).kcal)}. Se mangi altro, usa la ricerca o lo scanner come sempre.</p></div>`;
+   <div class="list">${SLOTS.map(sl=>planLine(k,sl,P[sl],true)).join("")}${ds?dessertLine(k):""}</div>
+   <p class="small dim" style="margin:0">Previsto ${fmt(tot)} kcal${P.Pranzo&&P.Pranzo.src==="mensa"?" più la mensa":""} su ${fmt(targets(k).kcal)}${ds?`, con ${fmt(dessertBudget())} kcal tenute per il dolce`:""}. Niente viene segnato da solo: tocca quando hai mangiato davvero.</p></div>`;
 }
 function planSheet(ws){
-  ws=ws||UI.planWs||weekStartOf(dk()); UI.planWs=ws;
+  ws=ws||UI.planWs||weekStartOf(dk()); UI.planWs=ws; applyMensa(ws);
   const P=S.core.plans[ws], wd=wdIdx(), nextWs=addDays(weekStartOf(dk()),7);
   openSheet(`<h2>Piano pasti</h2><div class="small muted">${dateShort(ws)} – ${dateShort(addDays(ws,6))}</div>
   ${P?Object.keys(P).sort().map(k=>{ const t=targets(k).kcal, tot=SLOTS.reduce((a,sl)=>a+planKcal(P[k][sl]),0);
@@ -793,6 +798,51 @@ function planSheet(ws){
    :`<p class="muted">Nessun piano per questa settimana.</p>`}
   <div class="grid2"><button class="btn sm" data-act="planGen" data-v="${ws}">${P?"Rigenera":"Genera"}</button><button class="btn sm" data-act="planShop" data-v="${ws}" ${P?"":"disabled"}>Ingredienti in lista</button></div>
   ${ws!==nextWs&&wd>=5?`<button class="btn pri block" data-act="planNext">Prepara la prossima settimana</button>`:ws===nextWs?`<button class="btn sm ghost" data-act="planSheetNow">Torna a questa settimana</button>`:""}`);
+}
+
+/* ---------- university canteen & evening dessert ---------- */
+// [nome, kcal, prot, carb, grassi] per una porzione normale da mensa
+const MENSA_OPTS={
+  primo:[["Pasta al pomodoro",420,13,80,6],["Pasta al ragù",540,22,78,15],["Risotto",480,10,82,12],["Lasagne",560,26,50,28],["Minestra o zuppa",230,9,32,7]],
+  secondo:[["Pollo o tacchino",240,36,2,9],["Carne rossa o arrosto",320,34,0,20],["Polpette o hamburger",350,24,10,23],["Cotoletta o impanato",420,26,24,24],["Uova o frittata",270,18,2,21],["Formaggio",300,20,1,24],["Legumi",230,14,32,4]],
+  contorno:[["Verdure cotte",90,3,9,4],["Insalata",50,2,5,3],["Patate al forno",220,4,32,9],["Purè",190,4,24,8]],
+  pane:[["Pane",160,5,32,1]],
+  dessert:[["Frutta",70,1,17,0],["Yogurt",110,5,15,3],["Dolce o budino",240,4,36,9]]
+};
+const MENSA_L={primo:"Primo",secondo:"Secondo",contorno:"Contorno",pane:"Pane",dessert:"Dessert"};
+const DESSERTS=[["Cioccolato fondente 20 g",110,2,9,8],["Yogurt greco con miele",150,15,18,0],["Coppetta di gelato piccola",180,3,22,9],["2 biscotti secchi",90,1,15,3],["Frutta e un quadratino di cioccolato",130,2,22,5]];
+const isMensaDay = k => { const m=S.core.profile.mensa; return !!(m&&m.on&&m.days.includes(wdIdx(parseDk(k)))); };
+const dessertBudget = () => { const d=S.core.profile.dessert; return d&&d.on?(+d.kcal||0):0; };
+const euro = v => "€"+(+v||0).toFixed(2).replace(".",",");
+function applyMensa(ws){
+  const P=S.core.plans[ws]; if(!P) return false; let ch=false;
+  for(const k in P){ const e=P[k].Pranzo;
+    if(isMensaDay(k)){ if(!(e&&(e.src==="mensa"||e.man))){ P[k].Pranzo={src:"mensa"}; ch=true; } }
+    else if(e&&e.src==="mensa"){ const n=pickMeal(k,"Pranzo",{},null); if(n){ P[k].Pranzo=n; ch=true; } else { delete P[k].Pranzo; ch=true; } } }
+  if(ch) touch("core"); return ch;
+}
+function mensaLine(k,withEat){
+  const d=peekDay(k), done=d&&d.planDone&&d.planDone.Pranzo, m=S.core.profile.mensa;
+  return `<div class="li"><div class="grow"><div class="eyebrow" style="font-size:10px">Pranzo</div><div class="t">Pranzo in mensa</div><div class="small muted">Menù completo ${euro(m.price)} · primo, secondo, contorno, pane e dessert · calorie da registrare</div></div>
+   <button class="x" data-act="planSwap" data-v="${k}|Pranzo" aria-label="Cambia: oggi niente mensa">${IC.redo}</button>
+   ${withEat?(done?`<span class="pill ok">fatto</span>`:`<button class="btn sm" data-act="mensaSheet">Registra</button>`):""}</div>`;
+}
+function dessertLine(k){
+  const d=peekDay(k), st=d&&d.planDone&&d.planDone.Dolce, b=dessertBudget();
+  if(st) return `<div class="li"><div class="grow"><div class="eyebrow" style="font-size:10px">Dolce serale</div><div class="t">${st==="skip"?"Saltato stasera":esc(st)}</div></div><button class="btn sm ghost" data-act="dsUndo">Annulla</button></div>`;
+  return `<div class="li" style="flex-wrap:wrap"><div class="grow" style="min-width:60%"><div class="eyebrow" style="font-size:10px">Dolce serale · facoltativo</div><div class="t">Fino a ${fmt(b)} kcal, già tenute da parte</div></div>
+   <div class="scroll-x" style="flex-basis:100%">${DESSERTS.filter(x=>x[1]<=b+30).map((x,i)=>`<button class="chip" data-act="dsEat" data-v="${DESSERTS.indexOf(x)}">${esc(x[0])} · ${x[1]}</button>`).join("")}<button class="chip" data-act="dsSkip">Saltato</button></div></div>`;
+}
+function mensaSel(){ UI.mz=UI.mz||Object.assign({primo:0,secondo:0,contorno:0,pane:0,dessert:0,q:1},S.core.mensaLast||{}); return UI.mz; }
+function mensaTotals(sel){ const t={kcal:0,p:0,c:0,f:0}, parts=[]; for(const c in MENSA_OPTS){ const i=sel[c]; if(i==null||i<0) continue; const o=MENSA_OPTS[c][i]; if(!o) continue; parts.push(o[0].toLowerCase()); t.kcal+=o[1]*sel.q; t.p+=o[2]*sel.q; t.c+=o[3]*sel.q; t.f+=o[4]*sel.q; } return {t,parts}; }
+function mensaSheet(){
+  const sel=mensaSel(), {t}=mensaTotals(sel);
+  openSheet(`<h2>Pranzo in mensa</h2><p class="small muted" style="margin:0">Tocca cosa hai preso oggi: i piatti cambiano, quindi la stima la fai tu ogni volta. Se non ti va, puoi segnare il pranzo senza calorie.</p>
+  ${Object.keys(MENSA_OPTS).map(c=>`<div class="eyebrow">${MENSA_L[c]}</div><div class="row wrap" style="gap:6px">${MENSA_OPTS[c].map((o,i)=>`<button class="chip ${sel[c]===i?"on":""}" data-act="mzPick" data-v="${c}|${i}">${esc(o[0])}</button>`).join("")}<button class="chip ${sel[c]==null||sel[c]<0?"on":""}" data-act="mzPick" data-v="${c}|-1">${c==="pane"?"No":"Niente"}</button></div>`).join("")}
+  <div class="eyebrow">Porzioni</div><div class="grid3">${[[0.8,"Piccole"],[1,"Normali"],[1.25,"Abbondanti"]].map(([q,l])=>`<button class="chip ${sel.q===q?"on":""}" data-act="mzQ" data-v="${q}">${l}</button>`).join("")}</div>
+  <div class="tile"><span class="lbl">Stima del pasto</span><span class="big" style="font-size:28px">${fmt(t.kcal)} kcal</span><span class="small muted num">P ${fmt(t.p)} g · C ${fmt(t.c)} g · G ${fmt(t.f)} g</span></div>
+  <button class="btn pri block" data-act="mensaSave" ${t.kcal?"":"disabled"}>Aggiungi al diario</button>
+  <button class="btn ghost block" data-act="mensaNoCal">Segna mangiato senza calorie</button>`);
 }
 
 /* ---------- shooting log ---------- */
@@ -1150,7 +1200,7 @@ function vFood(){
     <div class="grid3"><button class="btn sm" data-act="favSheet">${IC.star} Preferiti</button><button class="btn sm" data-act="yestSheet">${IC.redo} Come ieri</button><button class="btn sm" data-act="manSheet">${IC.plus} A mano</button></div>
     <p class="small dim" style="margin:0">Cerca “pasta” o scansiona il codice a barre della confezione, poi correggi i grammi: il resto lo calcola l'app. I pasti che ripeti salvali nei preferiti e diventano un tocco.</p></div>
   ${bySlot.length?bySlot.map(([s,ms])=>`<div class="card"><div class="row between"><div class="eyebrow">${s}</div><span class="num small muted">${fmt(ms.reduce((a,m)=>a+(+m.kcal||0),0))} kcal</span></div>
-    <div class="list">${ms.map(m=>`<div class="li"><div class="grow"><div class="t">${esc(m.name)}</div><div class="small muted num">${fmt(m.kcal)} kcal · P ${fmt(m.p)} · C ${fmt(m.c)} · G ${fmt(m.f)}</div></div><button class="x" data-act="delMeal" data-v="${m.id}" aria-label="Elimina pasto">${IC.x}</button></div>`).join("")}</div></div>`).join("")
+    <div class="list">${ms.map(m=>`<div class="li"><div class="grow"><div class="t">${esc(m.name)}</div><div class="small muted num">${m.untracked?"calorie non registrate":`${fmt(m.kcal)} kcal · P ${fmt(m.p)} · C ${fmt(m.c)} · G ${fmt(m.f)}`}</div></div><button class="x" data-act="delMeal" data-v="${m.id}" aria-label="Elimina pasto">${IC.x}</button></div>`).join("")}</div></div>`).join("")
    :`<div class="card"><p class="small muted" style="margin:0">Nessun pasto registrato oggi. Se proprio non hai voglia di contare, spunta almeno le abitudini nella schermata Oggi: valgono per la serie di giorni.</p></div>`}
   ${S.core.profile.simple?"":`<div class="card"><div class="eyebrow">Organizza</div><div class="grid3"><button class="btn sm" data-act="planSheet">Piano</button><button class="btn sm" data-act="recipes">Ricette</button><button class="btn sm" data-act="shopSheet">Spesa${S.core.shop.filter(x=>!x.done).length?" · "+S.core.shop.filter(x=>!x.done).length:""}</button></div></div>`}
   ${S.core.profile.simple?"":`<div class="card" id="ideas"><div class="row between"><div class="eyebrow">Cosa mangiare adesso</div><span class="small muted num">${fmt(Math.max(0,left.kcal))} kcal · ${fmt(Math.max(0,left.p))} g prot. rimaste</span></div>
@@ -1284,6 +1334,12 @@ function vMe(){
     <div class="row"><input id="ex_name" type="text" placeholder="Es. Analisi 1" aria-label="Nome esame"><input id="ex_date" type="date" aria-label="Data esame" style="width:150px;flex:none"></div>
     <button class="btn sm block" data-act="exAdd">${IC.plus} Aggiungi esame</button></div>
   <div class="card"><div class="row between"><div><div class="eyebrow">Pausa</div><div class="small muted">${pausedOn(dk())?`In pausa fino al ${dateShort(pausedOn(dk()).to)}`:"Malattia, vacanza o infortunio: la serie non si interrompe"}</div></div>${pausedOn(dk())?`<button class="btn sm" data-act="pauseEnd">Riprendi</button>`:`<button class="btn sm" data-act="pauseSheet">Metti in pausa</button>`}</div></div>
+  <div class="card"><div class="eyebrow">Mensa e dolce serale</div>
+    <div class="row between"><div><div class="t">Pranzo in mensa</div><div class="small muted">Compare come pranzo previsto nei giorni scelti</div></div><button class="chip ${p.mensa.on?"on":""}" data-act="mzOn">${p.mensa.on?"Attivo":"Spento"}</button></div>
+    ${p.mensa.on?`<div class="grid4" style="grid-template-columns:repeat(7,1fr);gap:3px">${GIORNI.map((g,i)=>`<button class="chip ${p.mensa.days.includes(i)?"on":""}" style="padding:7px 0;font-size:12px" data-act="mzDay" data-v="${i}">${g}</button>`).join("")}</div>
+    <label class="f" for="pf_mzp">Prezzo del menù completo (€)<input id="pf_mzp" type="number" step="0.05" inputmode="decimal" data-mz="price" value="${p.mensa.price}"></label>`:""}
+    <div class="row between"><div><div class="t">Dolce serale</div><div class="small muted">Facoltativo: calorie tenute da parte ogni sera</div></div><button class="chip ${p.dessert.on?"on":""}" data-act="dsOn">${p.dessert.on?"Attivo":"Spento"}</button></div>
+    ${p.dessert.on?`<label class="f" for="pf_dsk">Calorie per il dolce<input id="pf_dsk" type="number" step="10" inputmode="numeric" data-ds="kcal" value="${p.dessert.kcal}"></label>`:""}</div>
   <div class="card"><div class="eyebrow">Alimentazione</div>
     <label class="f" for="pf_avoid">Cibi che non mangi<textarea id="pf_avoid" data-pf="avoid" style="min-height:64px">${esc(p.avoid)}</textarea></label>
     <div class="grid2">
@@ -1514,8 +1570,11 @@ document.addEventListener("click",e=>{
     planNext(){ const ws=addDays(weekStartOf(dk()),7); if(!S.core.plans[ws]) genPlan(ws); planSheet(ws); },
     planSheetNow(){ planSheet(weekStartOf(dk())); },
     planSheet(){ planSheet(weekStartOf(dk())); },
-    planSwap(){ const [pk,sl]=v.split("|"); const ws=weekStartOf(pk), P=S.core.plans[ws]; if(!P||!P[pk]) return; const cur=P[pk][sl]; const e=pickMeal(pk,sl,{},null,cur&&cur.id); if(e){ P[pk][sl]=e; touch("core"); } if(document.body.classList.contains("sheet")) planSheet(ws); render(); },
-    planEat(){ const P=curPlan(k), e=P&&P[v], it=planItem(e); if(!it) return; const q=e.q; addMealFrom({name:q!==1?`${it.name} ×${fmt(q,2)}`:it.name,kcal:Math.round(it.kcal*q),p:Math.round(it.p*q),c:Math.round(it.c*q),f:Math.round(it.f*q)},v); const d=day(k); d.planDone=d.planDone||{}; d.planDone[v]=true; touchDay(k); render(); toast("Registrato"); },
+    planSwap(){ const [pk,sl]=v.split("|"); const ws=weekStartOf(pk); if(!S.core.plans[ws]) genPlan(ws); const P=S.core.plans[ws]; if(!P||!P[pk]) return; const cur=P[pk][sl]; let e;
+      if(sl==="Pranzo"&&isMensaDay(pk)&&cur&&cur.src!=="mensa"&&cur.man) e={src:"mensa"};
+      else { e=pickMeal(pk,sl,{},null,cur&&cur.src!=="mensa"?cur.id:null); if(e&&sl==="Pranzo"&&isMensaDay(pk)) e.man=true; }
+      if(e){ P[pk][sl]=e; touch("core"); } if(document.body.classList.contains("sheet")) planSheet(ws); render(); },
+    planEat(){ const P=curPlan(k), e=P&&P[v], it=planItem(e); if(!it) return; if(it.mensa){ mensaSheet(); return; } const q=e.q; addMealFrom({name:q!==1?`${it.name} ×${fmt(q,2)}`:it.name,kcal:Math.round(it.kcal*q),p:Math.round(it.p*q),c:Math.round(it.c*q),f:Math.round(it.f*q)},v); const d=day(k); d.planDone=d.planDone||{}; d.planDone[v]=true; touchDay(k); render(); toast("Registrato"); },
     planShop(){ const P=S.core.plans[v]; if(!P) return; const names=[]; Object.values(P).forEach(dd=>Object.values(dd).forEach(e=>{ const it=planItem(e); if(!it) return; if(it.ing) names.push(...it.ing); else names.push(...String(it.name).split(/,|\s\+\s/)); })); const n=shopAddMany(names); toast(n?`${n} prodotti in lista`:"Già tutto in lista"); },
     shSheet(){ shSheet(); },
     shSave(){ const sx={id:uid(),note:$("#sh_note").value.trim()}; let any=false; ZONES.forEach(([z])=>{ const m=+$("#sh_"+z+"_m").value||0, a=+$("#sh_"+z+"_a").value||0; if(a>0){ sx[z]=[Math.min(m,a),a]; any=true; } }); if(!any){ toast("Inserisci almeno i tiri tentati"); return; } const d=day(k); d.sh=d.sh||[]; d.sh.push(sx); touchDay(k); closeSheet(); render(); toast("Tiri salvati"); },
@@ -1541,6 +1600,17 @@ document.addEventListener("click",e=>{
     fbIn(){ fbSignIn(); },
     fbOut(){ confirmSheet("Uscire dall'account?","I dati restano su questo telefono e nel cloud. La sincronizzazione si ferma finché non rientri.","fbOutOk","Esci"); },
     fbOutOk(){ closeSheet(); FB.auth&&FB.auth.signOut(); toast("Uscito"); },
+    mensaSheet(){ UI.mz=null; mensaSheet(); },
+    mzPick(){ const [c,i]=v.split("|"); mensaSel()[c]=+i; mensaSheet(); },
+    mzQ(){ mensaSel().q=+v; mensaSheet(); },
+    mensaSave(){ const sel=mensaSel(), {t,parts}=mensaTotals(sel); if(!t.kcal) return; const d=day(k); d.meals.push({id:uid(),slot:"Pranzo",name:"Mensa: "+parts.join(", ")+(sel.q!==1?(sel.q<1?" (porzioni piccole)":" (porzioni abbondanti)"):""),kcal:Math.round(t.kcal),p:Math.round(t.p),c:Math.round(t.c),f:Math.round(t.f)}); d.planDone=d.planDone||{}; d.planDone.Pranzo=true; S.core.mensaLast={...sel}; touchDay(k); touch("core"); UI.mz=null; closeSheet(); AI_IDEAS=null; render(); toast(`Mensa registrata · ${fmt(t.kcal)} kcal`); },
+    mensaNoCal(){ const d=day(k); d.meals.push({id:uid(),slot:"Pranzo",name:"Pranzo in mensa",kcal:0,p:0,c:0,f:0,untracked:true}); d.planDone=d.planDone||{}; d.planDone.Pranzo=true; touchDay(k); UI.mz=null; closeSheet(); render(); toast("Pranzo segnato senza calorie"); },
+    mzOn(){ const m=S.core.profile.mensa; m.on=!m.on; touch("core"); Object.keys(S.core.plans).forEach(applyMensa); render(); },
+    mzDay(){ const m=S.core.profile.mensa, i=+v; m.days=m.days.includes(i)?m.days.filter(x=>x!==i):m.days.concat(i).sort(); touch("core"); Object.keys(S.core.plans).forEach(applyMensa); render(); },
+    dsOn(){ const ds=S.core.profile.dessert; ds.on=!ds.on; touch("core"); render(); },
+    dsEat(){ const x=DESSERTS[+v]; if(!x) return; const d=day(k); d.meals.push({id:uid(),slot:"Cena",name:"Dolce serale: "+x[0],kcal:x[1],p:x[2],c:x[3],f:x[4]}); d.planDone=d.planDone||{}; d.planDone.Dolce=x[0]; touchDay(k); AI_IDEAS=null; render(); toast("Dolce registrato"); },
+    dsSkip(){ const d=day(k); d.planDone=d.planDone||{}; d.planDone.Dolce="skip"; touchDay(k); render(); },
+    dsUndo(){ const d=day(k); const st=d.planDone&&d.planDone.Dolce; if(st&&st!=="skip"){ const i=d.meals.map(m=>m.name).lastIndexOf("Dolce serale: "+st); if(i>=0) d.meals.splice(i,1); } if(d.planDone) delete d.planDone.Dolce; touchDay(k); render(); },
     closeSheet(){ closeSheet(); },
     aiSheet(){ aiSheet(); },
     aiRun(){ aiRun(); },
@@ -1560,7 +1630,7 @@ document.addEventListener("click",e=>{
     manAdd(){ const name=$("#mn").value.trim()||"Pasto"; const kc=+$("#mk").value; if(!kc){ toast("Inserisci almeno le calorie"); return; }
       const src={name,kcal:kc,p:+$("#mp").value||0,c:+$("#mc").value||0,f:+$("#mf").value||0}; addMealFrom(src,$("#slotSel").value);
       if($("#mfav").checked){ S.core.favs.unshift({...src,id:uid(),slot:["Pranzo","Cena"].includes($("#slotSel").value)?"Pasto":$("#slotSel").value}); touch("core"); } closeSheet(); render(); toast("Pasto aggiunto"); },
-    delMeal(){ const d=day(k); d.meals=d.meals.filter(m=>m.id!==v); touchDay(k); AI_IDEAS=null; render(); },
+    delMeal(){ const d=day(k); const rm=d.meals.find(m=>m.id===v); if(rm&&d.planDone){ if(rm.slot==="Pranzo"&&/^(Mensa: |Pranzo in mensa)/.test(rm.name)) delete d.planDone.Pranzo; if(/^Dolce serale: /.test(rm.name)) delete d.planDone.Dolce; } d.meals=d.meals.filter(m=>m.id!==v); touchDay(k); AI_IDEAS=null; render(); },
     aiIdeas(){ aiIdeas(); },
     addIdea(){ const t=targets(), tot=totals(day()); const list=AI_IDEAS||S.core.favs.filter(f=>f.kcal<=Math.max(250,t.kcal-tot.kcal+80)).sort((a,b)=>(b.p/b.kcal)-(a.p/a.kcal)).slice(0,3); const f=list[+v]; if(f){ addMealFrom(f,slotNow()); render(); toast("Pasto aggiunto"); } },
     range(){ UI.progRange=+v; render(); },
@@ -1612,6 +1682,8 @@ document.addEventListener("change",e=>{
   if(el.dataset.grams!=null){ const it=AI_ITEMS[+el.dataset.grams], g=+el.value; if(it&&g>0){ const base=it.grams||g; const k=g/base; ["kcal","p","c","f"].forEach(x=>it[x]=it[x]*k); it.grams=g; setTimeout(()=>{ const o=$("#aiOut"); if(o) o.innerHTML=aiOutHtml(); },0); } }
   if(el.id==="impFile"&&el.files[0]){ const r=new FileReader(); r.onload=()=>importBackup(String(r.result)); r.readAsText(el.files[0]); }
   if(el.dataset.cmp){ UI["cmp"+el.dataset.cmp]=el.value; cmpSheet(); }
+  if(el.dataset.mz==="price"){ S.core.profile.mensa.price=Math.max(0,+String(el.value).replace(",",".")||0); touch("core"); render(); }
+  if(el.dataset.ds==="kcal"){ S.core.profile.dessert.kcal=clamp(+el.value||0,0,500); touch("core"); render(); }
   if(el.dataset.habits){ S.core.habits=el.value.split("\n").map(s=>s.trim()).filter(Boolean).slice(0,10); touch("core"); }
   if(el.id==="aiPhoto" && el.files[0]){ shrink(el.files[0],1024,0.8).then(r=>{ AI_FILES=[r.blob]; $("#aiPhotoLbl").textContent="Foto pronta"; }).catch(()=>toast("Foto non leggibile")); }
   if(el.id==="photoIn" && el.files[0]){ shrink(el.files[0],720,0.72).then(r=>{ const id=uid(); PHOTO_MEM[id]=r.url; ls.set("athleticos.ph."+id,r.url); S.core.photos.push({id,d:dk()}); touch("core"); photoQueue.push(id); scheduleFlush(); render(); toast("Foto salvata"); }).catch(()=>toast("Foto non leggibile")); }
