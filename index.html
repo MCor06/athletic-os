@@ -1049,6 +1049,27 @@ function monthText(M){
     M.p!=null?`Proteine medie: ${fmt(M.p)} g`:null].filter(Boolean).join("\n");
 }
 
+/* ---------- meals prepared by Claude (#add= links) ---------- */
+let INBOX=null;
+function readAddLink(){
+  const h=location.hash; if(!h.startsWith("#add=")) return false;
+  try{ INBOX=JSON.parse(decodeURIComponent(h.slice(5))); if(!INBOX||!Array.isArray(INBOX.i)) throw 0; INBOX.i.forEach(x=>{ if(x.on==null) x.on=true; }); }
+  catch(e){ INBOX=null; toast("Link del pasto non valido"); }
+  try{ history.replaceState(null,"",location.pathname+location.search+"#cibo"); }catch(e){}
+  UI.tab="cibo"; return !!INBOX;
+}
+function inboxSheet(){
+  if(!INBOX) return;
+  const d=INBOX.d||dk(), done=(S.core.imported||[]).includes(INBOX.x);
+  const tot=INBOX.i.filter(x=>x.on).reduce((a,x)=>a+(+x.k||0),0);
+  openSheet(`<div class="eyebrow">Preparato da Claude</div><h2>${esc(INBOX.t||"Pasto da aggiungere")}</h2>
+  <div class="small muted">${dateShort(d)} · ${esc(INBOX.i[0]&&INBOX.i[0].s||"")}</div>
+  ${done?`<p class="small" style="margin:0;color:var(--warn)">Questo pasto risulta già aggiunto. Se lo aggiungi di nuovo verrà contato due volte.</p>`:""}
+  <div class="list">${INBOX.i.map((x,j)=>`<div class="li"><button class="check ${x.on?"on":""}" data-act="inbToggle" data-v="${j}" aria-label="Includi ${esc(x.n)}">${x.on?IC.tick:""}</button><div class="grow"><div class="t">${esc(x.n)}</div><div class="small muted num">${fmt(x.k)} kcal · P ${fmt(x.p)} · C ${fmt(x.c)} · G ${fmt(x.f)}${x.h?` · ${esc(x.h)}`:""}</div></div></div>`).join("")}</div>
+  <div class="tile"><span class="lbl">Totale selezionato</span><span class="big" style="font-size:28px">${fmt(tot)} kcal</span></div>
+  <button class="btn pri block" data-act="inbAdd" ${tot?"":"disabled"}>Aggiungi al diario</button>
+  <button class="btn ghost block" data-act="inbCancel">Annulla</button>`);
+}
 /* ---------- render ---------- */
 const TABS=[["oggi","Oggi","today"],["allena","Allena","train"],["cibo","Cibo","food"],["progressi","Progressi","prog"],["profilo","Profilo","me"]];
 function render(){
@@ -1620,6 +1641,12 @@ document.addEventListener("click",e=>{
     dsEat(){ const x=DESSERTS[+v]; if(!x) return; const d=day(k); d.meals.push({id:uid(),slot:"Cena",name:"Dolce serale: "+x[0],kcal:x[1],p:x[2],c:x[3],f:x[4]}); d.planDone=d.planDone||{}; d.planDone.Dolce=x[0]; touchDay(k); AI_IDEAS=null; render(); toast("Dolce registrato"); },
     dsSkip(){ const d=day(k); d.planDone=d.planDone||{}; d.planDone.Dolce="skip"; touchDay(k); render(); },
     dsUndo(){ const d=day(k); const st=d.planDone&&d.planDone.Dolce; if(st&&st!=="skip"){ const i=d.meals.map(m=>m.name).lastIndexOf("Dolce serale: "+st); if(i>=0) d.meals.splice(i,1); } if(d.planDone) delete d.planDone.Dolce; touchDay(k); render(); },
+    inbToggle(){ const x=INBOX&&INBOX.i[+v]; if(x){ x.on=!x.on; inboxSheet(); } },
+    inbCancel(){ INBOX=null; closeSheet(); },
+    inbAdd(){ if(!INBOX) return; const dd=INBOX.d||dk(), d=day(dd); let n=0;
+      INBOX.i.filter(x=>x.on).forEach(x=>{ d.meals.push({id:uid(),slot:x.s||"Pranzo",name:String(x.n||"Pasto"),kcal:Math.round(+x.k||0),p:Math.round(+x.p||0),c:Math.round(+x.c||0),f:Math.round(+x.f||0)}); if(x.m){ d.planDone=d.planDone||{}; d.planDone[x.s||"Pranzo"]=true; } n++; });
+      if(INBOX.x){ S.core.imported=(S.core.imported||[]).concat(INBOX.x).slice(-100); touch("core"); }
+      touchDay(dd); INBOX=null; closeSheet(); AI_IDEAS=null; render(); toast(n===1?"Pasto aggiunto":`${n} voci aggiunte`); },
     closeSheet(){ closeSheet(); },
     aiSheet(){ aiSheet(); },
     aiRun(){ aiRun(); },
@@ -1697,7 +1724,7 @@ document.addEventListener("change",e=>{
   if(el.id==="aiPhoto" && el.files[0]){ shrink(el.files[0],1024,0.8).then(r=>{ AI_FILES=[r.blob]; $("#aiPhotoLbl").textContent="Foto pronta"; }).catch(()=>toast("Foto non leggibile")); }
   if(el.id==="photoIn" && el.files[0]){ shrink(el.files[0],720,0.72).then(r=>{ const id=uid(); PHOTO_MEM[id]=r.url; ls.set("athleticos.ph."+id,r.url); S.core.photos.push({id,d:dk()}); touch("core"); photoQueue.push(id); scheduleFlush(); render(); toast("Foto salvata"); }).catch(()=>toast("Foto non leggibile")); }
 });
-window.addEventListener("hashchange",()=>{ const t=location.hash.slice(1); if(t&&t!==UI.tab&&TABS.some(x=>x[0]===t)){ UI.tab=t; render(); } });
+window.addEventListener("hashchange",()=>{ if(readAddLink()){ render(); inboxSheet(); return; } const t=location.hash.slice(1); if(t&&t!==UI.tab&&TABS.some(x=>x[0]===t)){ UI.tab=t; render(); } });
 
 /* ---------- standalone: speech, backup, PWA ---------- */
 let HAS_AI=false, PERSIST=null, INSTALL_EVT=null;
@@ -1866,7 +1893,9 @@ document.addEventListener("focusout",()=>{ if(UI.needRender) setTimeout(()=>{ co
 document.addEventListener("keydown",e=>{ if(e.key!=="Enter") return;
   if(e.target.id==="shopIn"){ e.preventDefault(); const b=document.querySelector('[data-act="shopAdd"]'); if(b) b.click(); }
   if(e.target.id==="scanCode"){ e.preventDefault(); stopCam(); lookupCode(e.target.value); } });
+const hadAdd=readAddLink();
 render();
+if(hadAdd) setTimeout(inboxSheet,50);
 initPWA();
 initCloud();
 initFirebase();
